@@ -14,30 +14,12 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            // Title
-            Text("Drive Speed Tester")
-                .font(.title)
-                .fontWeight(.bold)
+            // Drive info
+            if let selectedDrive = selectedDrive {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Drive Info")
+                        .font(.headline)
 
-            // Drive Selection
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Select Drive")
-                    .font(.headline)
-
-                Picker("Drive", selection: $selectedDrive) {
-                    Text("Choose a drive...").tag(Optional<DiskInfo>(nil))
-
-                    ForEach(availableDrives, id: \.path) { drive in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(drive.name)
-                        }
-                        .tag(Optional(drive))
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                // Drive info
-                if let selectedDrive = selectedDrive {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Path: \(selectedDrive.path)")
@@ -57,86 +39,89 @@ struct ContentView: View {
                 }
             }
 
-            Divider()
-
-            // Test Controls
-            VStack(spacing: 15) {
-                Button(action: startTest) {
-                    if tester.isTestingActive {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Testing...")
-                        }
-                    } else {
-                        HStack(spacing: 8) {
-                            Image(systemName: "bolt.fill")
-                            Text("Start Speed Test")
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(selectedDrive == nil || tester.isTestingActive)
-
-                // Progress text
-                if !tester.testProgress.isEmpty {
-                    Text(tester.testProgress)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+            // Progress text
+            if !tester.testProgress.isEmpty {
+                Text(tester.testProgress)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
 
-            Divider()
+            // Results in ScrollView
+            ScrollView {
+                if let results = tester.testResult {
+                    VStack(spacing: 12) {
+                        Text("Speed Test Results")
+                            .font(.headline)
 
-            // Results
-            if let result = tester.testResult {
-                VStack(spacing: 15) {
-                    Text("Speed Test Results")
-                        .font(.headline)
+                        // 100 MB Test
+                        TestResultRow(test: results.test100MB)
 
-                    HStack(spacing: 30) {
-                        VStack(alignment: .center, spacing: 8) {
-                            Text("Read Speed")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        // 1 GB Test
+                        TestResultRow(test: results.test1GB)
 
-                            Text(String(format: "%.2f MB/s", result.readSpeed))
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.blue)
-                        }
-                        .frame(maxWidth: .infinity)
-
-                        VStack(alignment: .center, spacing: 8) {
-                            Text("Write Speed")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            Text(String(format: "%.2f MB/s", result.writeSpeed))
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.green)
-                        }
-                        .frame(maxWidth: .infinity)
+                        // 10 GB Test
+                        TestResultRow(test: results.test10GB)
                     }
-                    .padding()
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(12)
-                }
-            } else if !tester.testProgress.isEmpty {
-                VStack {
-                    ProgressView()
-                    Text("Testing in progress...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxHeight: .infinity, alignment: .center)
-            }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                } else if !tester.testProgress.isEmpty {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Testing in progress...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                } else {
+                    VStack(spacing: 20) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
 
-            Spacer()
+                        VStack(spacing: 8) {
+                            Text("Ready to Test")
+                                .font(.headline)
+
+                            Text("Select a drive from the toolbar and click 'Start Speed Test' to begin")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                }
+            }
         }
         .padding()
         .frame(minWidth: 500, minHeight: 400)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Picker("Drive", selection: $selectedDrive) {
+                    Text("Choose a drive...").tag(Optional<DiskInfo>(nil))
+                    
+                    ForEach(availableDrives, id: \.path) { drive in
+                        Text(drive.name).tag(Optional(drive))
+                    }
+                }
+            }
+            ToolbarItem(placement: .navigation) {
+                Button(action: refreshDrives) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Rescan available drives")
+            }
+            
+            ToolbarItem(placement: .status) {
+                Spacer()
+            }
+            
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: startTest) {
+                    Image(systemName: "bolt.fill")
+                }
+                .disabled(selectedDrive == nil || tester.isTestingActive)
+            }
+        }
         .onAppear {
             availableDrives = tester.getAvailableDrives()
         }
@@ -148,5 +133,58 @@ struct ContentView: View {
         Task {
             await tester.runSpeedTest(on: drive.path)
         }
+    }
+
+    private func refreshDrives() {
+        availableDrives = tester.getAvailableDrives()
+    }
+}
+
+struct TestResultRow: View {
+    let test: TestResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(test.fileSize)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            HStack(spacing: 20) {
+                VStack(alignment: .center, spacing: 6) {
+                    Text("Read")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text(String(format: "%.2f", test.readSpeed))
+                        .font(.title3)
+                        .fontWeight(.bold)
+                        .foregroundColor(.blue)
+
+                    Text("MB/s")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(alignment: .center, spacing: 6) {
+                    Text("Write")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text(String(format: "%.2f", test.writeSpeed))
+                        .font(.title3)
+                        .fontWeight(.bold)
+                        .foregroundColor(.green)
+
+                    Text("MB/s")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding()
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(8)
     }
 }

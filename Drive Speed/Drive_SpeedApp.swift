@@ -13,5 +13,6 @@ struct Drive_SpeedApp: App {
         WindowGroup {
             ContentView()
         }
+        .windowStyle(.hiddenTitleBar)
     }
 }

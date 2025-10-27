@@ -14,9 +14,17 @@ struct DiskInfo: Hashable, Equatable {
     let available: Int64
 }
 
-struct SpeedTestResult {
+struct TestResult {
+    let fileSize: String
+    let fileSizeBytes: Int
     let readSpeed: Double // MB/s
     let writeSpeed: Double // MB/s
+}
+
+struct SpeedTestResult {
+    let test100MB: TestResult
+    let test1GB: TestResult
+    let test10GB: TestResult
 }
 
 @MainActor
@@ -25,8 +33,14 @@ class DiskSpeedTester: NSObject, ObservableObject {
     @Published var testProgress: String = ""
     @Published var testResult: SpeedTestResult?
 
-    private let testFileSize: Int = 100 * 1024 * 1024 // 100 MB
-    private let testFileName = "DiskSpeedTest_\(UUID().uuidString).bin"
+    private let testFileBaseName = "DiskSpeedTest_\(UUID().uuidString).bin"
+
+    // Test configurations: (label, size in bytes)
+    private let testConfigs = [
+        ("100 MB", 100 * 1024 * 1024),
+        ("1 GB", 1024 * 1024 * 1024),
+        ("10 GB", 10 * 1024 * 1024 * 1024)
+    ]
 
     // Get list of available drives
     func getAvailableDrives() -> [DiskInfo] {
@@ -71,48 +85,71 @@ class DiskSpeedTester: NSObject, ObservableObject {
             self.testResult = nil
         }
 
-        // Find a writable location on the drive
-        guard let writablePath = findWritablePath(on: diskPath) else {
-            DispatchQueue.main.async {
-                self.testProgress = "Error: No writable location found on this drive. Check permissions."
-                self.isTestingActive = false
+        // Run tests on background thread to prevent UI blocking
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Find a writable location on the drive
+            guard let writablePath = self.findWritablePath(on: diskPath) else {
+                DispatchQueue.main.async {
+                    self.testProgress = "Error: No writable location found on this drive. Check permissions."
+                    self.isTestingActive = false
+                }
+                return
             }
-            return
-        }
 
-        let testFilePath = (writablePath as NSString).appendingPathComponent(testFileName)
-        var readSpeed: Double = 0
-        var writeSpeed: Double = 0
+            var results: [TestResult] = []
 
-        do {
-            // Write test
-            DispatchQueue.main.async {
-                self.testProgress = "Testing write speed..."
-            }
-            writeSpeed = try await performWriteTest(filePath: testFilePath)
+            do {
+                // Run all three tests
+                for (index, (label, fileSize)) in self.testConfigs.enumerated() {
+                    let testNumber = index + 1
+                    DispatchQueue.main.async {
+                        self.testProgress = "Test \(testNumber)/3: \(label)"
+                    }
 
-            // Read test
-            DispatchQueue.main.async {
-                self.testProgress = "Testing read speed..."
-            }
-            readSpeed = try await performReadTest(filePath: testFilePath)
+                    let testFileName = "DiskSpeedTest_\(UUID().uuidString).bin"
+                    let testFilePath = (writablePath as NSString).appendingPathComponent(testFileName)
 
-            // Cleanup
-            DispatchQueue.main.async {
-                self.testProgress = "Cleaning up..."
-            }
-            try FileManager.default.removeItem(atPath: testFilePath)
+                    // Write test
+                    DispatchQueue.main.async {
+                        self.testProgress = "Test \(testNumber)/3: \(label) - Writing..."
+                    }
+                    let writeSpeed = try self.performWriteTestSync(filePath: testFilePath, fileSize: fileSize)
 
-            // Update results
-            DispatchQueue.main.async {
-                self.testResult = SpeedTestResult(readSpeed: readSpeed, writeSpeed: writeSpeed)
-                self.testProgress = "Test complete!"
-                self.isTestingActive = false
-            }
-        } catch {
-            DispatchQueue.main.async {
-                self.testProgress = "Error: \(error.localizedDescription)"
-                self.isTestingActive = false
+                    // Read test
+                    DispatchQueue.main.async {
+                        self.testProgress = "Test \(testNumber)/3: \(label) - Reading..."
+                    }
+                    let readSpeed = try self.performReadTestSync(filePath: testFilePath, fileSize: fileSize)
+
+                    // Cleanup
+                    try FileManager.default.removeItem(atPath: testFilePath)
+
+                    let result = TestResult(
+                        fileSize: label,
+                        fileSizeBytes: fileSize,
+                        readSpeed: readSpeed,
+                        writeSpeed: writeSpeed
+                    )
+                    results.append(result)
+                }
+
+                // Update results on main thread
+                DispatchQueue.main.async {
+                    if results.count == 3 {
+                        self.testResult = SpeedTestResult(
+                            test100MB: results[0],
+                            test1GB: results[1],
+                            test10GB: results[2]
+                        )
+                    }
+                    self.testProgress = "All tests complete!"
+                    self.isTestingActive = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.testProgress = "Error: \(error.localizedDescription)"
+                    self.isTestingActive = false
+                }
             }
         }
     }
@@ -158,10 +195,10 @@ class DiskSpeedTester: NSObject, ObservableObject {
         return nil
     }
 
-    private func performWriteTest(filePath: String) async throws -> Double {
-        let chunkSize = 4 * 1024 * 1024 // 4 MB chunks for better throughput measurement
+    private func performWriteTestSync(filePath: String, fileSize: Int) throws -> Double {
+        let chunkSize = 8 * 1024 * 1024 // 8 MB chunks for better throughput measurement
         let chunk = Data(repeating: 0xAB, count: chunkSize)
-        let numChunks = testFileSize / chunkSize
+        let numChunks = fileSize / chunkSize
 
         let startTime = Date()
 
@@ -185,50 +222,40 @@ class DiskSpeedTester: NSObject, ObservableObject {
         fileHandle.synchronizeFile()
 
         let elapsed = Date().timeIntervalSince(startTime)
-        let speedMBps = Double(testFileSize) / (1024 * 1024) / elapsed
+        let speedMBps = Double(fileSize) / (1024 * 1024) / elapsed
 
         return speedMBps
     }
 
-    private func performReadTest(filePath: String) async throws -> Double {
-        // Read the test file multiple times for better accuracy
-        let iterations = 3
-        var totalTime: TimeInterval = 0
-        let chunkSize = 4 * 1024 * 1024 // 4 MB chunks
+    private func performReadTestSync(filePath: String, fileSize: Int) throws -> Double {
+        // Read the test file once for faster testing (especially for large files)
+        let chunkSize = 8 * 1024 * 1024 // 8 MB chunks
 
-        for _ in 0..<iterations {
-            let startTime = Date()
+        let startTime = Date()
 
-            guard let fileHandle = FileHandle(forReadingAtPath: filePath) else {
-                throw NSError(domain: "ReadTest", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to open file for reading"])
-            }
-
-            defer {
-                fileHandle.closeFile()
-            }
-
-            // Read in chunks
-            var bytesRead: UInt64 = 0
-            while bytesRead < UInt64(testFileSize) {
-                let remainingBytes = testFileSize - Int(bytesRead)
-                let currentChunkSize = min(chunkSize, remainingBytes)
-
-                let data = fileHandle.readData(ofLength: currentChunkSize)
-                if data.isEmpty {
-                    break
-                }
-                bytesRead += UInt64(data.count)
-            }
-
-            let elapsed = Date().timeIntervalSince(startTime)
-            totalTime += elapsed
-
-            // Clear filesystem cache between reads
-            await clearFileSystemCache()
+        guard let fileHandle = FileHandle(forReadingAtPath: filePath) else {
+            throw NSError(domain: "ReadTest", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to open file for reading"])
         }
 
-        let averageTime = totalTime / Double(iterations)
-        let speedMBps = Double(testFileSize) / (1024 * 1024) / averageTime
+        defer {
+            fileHandle.closeFile()
+        }
+
+        // Read in chunks
+        var bytesRead: UInt64 = 0
+        while bytesRead < UInt64(fileSize) {
+            let remainingBytes = fileSize - Int(bytesRead)
+            let currentChunkSize = min(chunkSize, remainingBytes)
+
+            let data = fileHandle.readData(ofLength: currentChunkSize)
+            if data.isEmpty {
+                break
+            }
+            bytesRead += UInt64(data.count)
+        }
+
+        let elapsed = Date().timeIntervalSince(startTime)
+        let speedMBps = Double(fileSize) / (1024 * 1024) / elapsed
 
         return speedMBps
     }
