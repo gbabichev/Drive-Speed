@@ -82,7 +82,7 @@ Download from Releases. It's signed & notarized!
 Clone the repo and build with Xcode:
 
 ```bash
-git clone https://github.com/gbabichev/MP4-Tool.git
+git clone https://github.com/gbabichev/Drive-Speed.git
 ```
 
 ## 📝 Changelog
