@@ -64,7 +64,7 @@ struct ContentView: View {
                         TestResultRow(test: results.test10GB)
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
-                } else if !tester.testProgress.isEmpty {
+                } else if tester.isTestingActive {
                     VStack(spacing: 16) {
                         ProgressView()
                         Text("Testing in progress...")
@@ -117,14 +117,34 @@ struct ContentView: View {
             }
             
             ToolbarItem(placement: .primaryAction) {
-                Button(action: startTest) {
-                    Image(systemName: "bolt.fill")
+                Button(action: toggleTest) {
+                    if tester.isTestingActive {
+                        HStack(spacing: 6) {
+                            Image(systemName: "stop.fill")
+                            Text("Stop")
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bolt.fill")
+                            Text("Start")
+                        }
+                    }
                 }
-                .disabled(selectedDrive == nil || tester.isTestingActive)
+                .disabled(selectedDrive == nil)
             }
         }
         .onAppear {
             availableDrives = tester.getAvailableDrives()
+        }
+    }
+
+    private func toggleTest() {
+        if tester.isTestingActive {
+            // Cancel the test
+            tester.cancelTest()
+        } else {
+            // Start the test
+            startTest()
         }
     }
 

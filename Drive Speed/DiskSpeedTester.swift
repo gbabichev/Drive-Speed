@@ -21,6 +21,30 @@ struct TestResult {
     let writeSpeed: Double // MB/s
 }
 
+// Thread-safe flag holder - nonisolated to be used from background threads
+nonisolated final class CancellationFlag: @unchecked Sendable {
+    private var _isCancelled = false
+    private let lock = NSLock()
+
+    nonisolated var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isCancelled
+    }
+
+    nonisolated func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        _isCancelled = true
+    }
+
+    nonisolated func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        _isCancelled = false
+    }
+}
+
 struct SpeedTestResult {
     let test100MB: TestResult
     let test1GB: TestResult
@@ -34,6 +58,7 @@ class DiskSpeedTester: NSObject, ObservableObject {
     @Published var testResult: SpeedTestResult?
 
     private let testFileBaseName = "DiskSpeedTest_\(UUID().uuidString).bin"
+    nonisolated private let cancellationFlag = CancellationFlag()
 
     // Test configurations: (label, size in bytes)
     private let testConfigs = [
@@ -94,6 +119,7 @@ class DiskSpeedTester: NSObject, ObservableObject {
         }
 
         DispatchQueue.main.async {
+            self.cancellationFlag.reset()
             self.isTestingActive = true
             self.testProgress = "Finding writable location..."
             self.testResult = nil
@@ -115,6 +141,15 @@ class DiskSpeedTester: NSObject, ObservableObject {
             do {
                 // Run all three tests
                 for (index, (label, fileSize)) in self.testConfigs.enumerated() {
+                    // Check if cancelled
+                    if self.cancellationFlag.isCancelled {
+                        DispatchQueue.main.async {
+                            self.testProgress = "Test cancelled"
+                            self.isTestingActive = false
+                        }
+                        return
+                    }
+
                     let testNumber = index + 1
                     DispatchQueue.main.async {
                         self.testProgress = "Test \(testNumber)/3: \(label)"
@@ -123,20 +158,22 @@ class DiskSpeedTester: NSObject, ObservableObject {
                     let testFileName = "DiskSpeedTest_\(UUID().uuidString).bin"
                     let testFilePath = (writablePath as NSString).appendingPathComponent(testFileName)
 
+                    // Ensure cleanup happens even if an error occurs
+                    defer {
+                        try? FileManager.default.removeItem(atPath: testFilePath)
+                    }
+
                     // Write test
                     DispatchQueue.main.async {
                         self.testProgress = "Test \(testNumber)/3: \(label) - Writing..."
                     }
-                    let writeSpeed = try self.performWriteTestSync(filePath: testFilePath, fileSize: fileSize)
+                    let writeSpeed = try self.performWriteTestSync(filePath: testFilePath, fileSize: fileSize, cancellationFlag: self.cancellationFlag)
 
                     // Read test
                     DispatchQueue.main.async {
                         self.testProgress = "Test \(testNumber)/3: \(label) - Reading..."
                     }
-                    let readSpeed = try self.performReadTestSync(filePath: testFilePath, fileSize: fileSize)
-
-                    // Cleanup
-                    try FileManager.default.removeItem(atPath: testFilePath)
+                    let readSpeed = try self.performReadTestSync(filePath: testFilePath, fileSize: fileSize, cancellationFlag: self.cancellationFlag)
 
                     let result = TestResult(
                         fileSize: label,
@@ -158,14 +195,36 @@ class DiskSpeedTester: NSObject, ObservableObject {
                     }
                     self.testProgress = "All tests complete!"
                     self.isTestingActive = false
+
+                    // Clear progress message after 1 second
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        if !self.isTestingActive {
+                            self.testProgress = ""
+                        }
+                    }
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self.testProgress = "Error: \(error.localizedDescription)"
-                    self.isTestingActive = false
+                // Don't show error for cancellation
+                let nsError = error as NSError
+                if nsError.code != -2 {
+                    DispatchQueue.main.async {
+                        self.testProgress = "Error: \(error.localizedDescription)"
+                        self.isTestingActive = false
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.isTestingActive = false
+                        // Clear progress immediately for cancellation
+                        self.testProgress = ""
+                    }
                 }
             }
         }
+    }
+
+    // Cancel the ongoing speed test
+    func cancelTest() {
+        cancellationFlag.cancel()
     }
 
     // Find a writable location on the target drive
@@ -209,7 +268,7 @@ class DiskSpeedTester: NSObject, ObservableObject {
         return nil
     }
 
-    nonisolated private func performWriteTestSync(filePath: String, fileSize: Int) throws -> Double {
+    nonisolated private func performWriteTestSync(filePath: String, fileSize: Int, cancellationFlag: CancellationFlag) throws -> Double {
         let chunkSize = 8 * 1024 * 1024 // 8 MB chunks for better throughput measurement
         let chunk = Data(repeating: 0xAB, count: chunkSize)
         let numChunks = fileSize / chunkSize
@@ -229,6 +288,10 @@ class DiskSpeedTester: NSObject, ObservableObject {
 
         // Write chunks
         for _ in 0..<numChunks {
+            // Check for cancellation
+            if cancellationFlag.isCancelled {
+                throw NSError(domain: "WriteTest", code: -2, userInfo: [NSLocalizedDescriptionKey: "Test cancelled"])
+            }
             try fileHandle.write(contentsOf: chunk)
         }
 
@@ -241,7 +304,7 @@ class DiskSpeedTester: NSObject, ObservableObject {
         return speedMBps
     }
 
-    nonisolated private func performReadTestSync(filePath: String, fileSize: Int) throws -> Double {
+    nonisolated private func performReadTestSync(filePath: String, fileSize: Int, cancellationFlag: CancellationFlag) throws -> Double {
         // Read the test file once for faster testing (especially for large files)
         let chunkSize = 8 * 1024 * 1024 // 8 MB chunks
 
@@ -258,6 +321,11 @@ class DiskSpeedTester: NSObject, ObservableObject {
         // Read in chunks
         var bytesRead: UInt64 = 0
         while bytesRead < UInt64(fileSize) {
+            // Check for cancellation
+            if cancellationFlag.isCancelled {
+                throw NSError(domain: "ReadTest", code: -2, userInfo: [NSLocalizedDescriptionKey: "Test cancelled"])
+            }
+
             let remainingBytes = fileSize - Int(bytesRead)
             let currentChunkSize = min(chunkSize, remainingBytes)
 
