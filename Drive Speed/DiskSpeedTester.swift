@@ -78,7 +78,21 @@ class DiskSpeedTester: NSObject, ObservableObject {
     }
 
     // Run speed test on a selected drive
-    func runSpeedTest(on diskPath: String) async {
+    func runSpeedTest(on diskPath: String, availableSpace: Int64) async {
+        // Check if there's enough space (need 10GB for the largest test + 1GB buffer)
+        let requiredSpace: Int64 = 11 * 1024 * 1024 * 1024 // 11 GB
+
+        if availableSpace < requiredSpace {
+            let availableGB = Double(availableSpace) / (1024 * 1024 * 1024)
+            let requiredGB = Double(requiredSpace) / (1024 * 1024 * 1024)
+
+            DispatchQueue.main.async {
+                self.testProgress = "Error: Insufficient disk space. Need \(String(format: "%.1f", requiredGB))GB, but only \(String(format: "%.1f", availableGB))GB available."
+                self.isTestingActive = false
+            }
+            return
+        }
+
         DispatchQueue.main.async {
             self.isTestingActive = true
             self.testProgress = "Finding writable location..."
@@ -155,7 +169,7 @@ class DiskSpeedTester: NSObject, ObservableObject {
     }
 
     // Find a writable location on the target drive
-    private func findWritablePath(on diskPath: String) -> String? {
+    nonisolated private func findWritablePath(on diskPath: String) -> String? {
         let fileManager = FileManager.default
         let testFileName = "WriteTest_\(UUID().uuidString)"
 
@@ -195,7 +209,7 @@ class DiskSpeedTester: NSObject, ObservableObject {
         return nil
     }
 
-    private func performWriteTestSync(filePath: String, fileSize: Int) throws -> Double {
+    nonisolated private func performWriteTestSync(filePath: String, fileSize: Int) throws -> Double {
         let chunkSize = 8 * 1024 * 1024 // 8 MB chunks for better throughput measurement
         let chunk = Data(repeating: 0xAB, count: chunkSize)
         let numChunks = fileSize / chunkSize
@@ -227,7 +241,7 @@ class DiskSpeedTester: NSObject, ObservableObject {
         return speedMBps
     }
 
-    private func performReadTestSync(filePath: String, fileSize: Int) throws -> Double {
+    nonisolated private func performReadTestSync(filePath: String, fileSize: Int) throws -> Double {
         // Read the test file once for faster testing (especially for large files)
         let chunkSize = 8 * 1024 * 1024 // 8 MB chunks
 

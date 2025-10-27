@@ -93,16 +93,17 @@ struct ContentView: View {
             }
         }
         .padding()
-        .frame(minWidth: 500, minHeight: 400)
+        .frame(minWidth: 600, minHeight: 600)
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Picker("Drive", selection: $selectedDrive) {
-                    Text("Choose a drive...").tag(Optional<DiskInfo>(nil))
+                    Text("Choose a Drive").tag(Optional<DiskInfo>(nil))
                     
                     ForEach(availableDrives, id: \.path) { drive in
                         Text(drive.name).tag(Optional(drive))
                     }
                 }
+                .pickerStyle(.menu)
             }
             ToolbarItem(placement: .navigation) {
                 Button(action: refreshDrives) {
@@ -131,7 +132,7 @@ struct ContentView: View {
         guard let drive = selectedDrive else { return }
 
         Task {
-            await tester.runSpeedTest(on: drive.path)
+            await tester.runSpeedTest(on: drive.path, availableSpace: drive.available)
         }
     }
 
