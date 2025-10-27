@@ -1,0 +1,28 @@
+{
+  "fill" : {
+    "solid" : "extended-gray:1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "DriveSpeed.png",
+          "name" : "DriveSpeed"
+        }
+      ],
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 1
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}
